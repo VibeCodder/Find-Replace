@@ -622,15 +622,23 @@
         .map(line => line.replace(/\r$/, '').trimEnd())
         .filter(line => line.trim())
         .map(line => {
+          let title, value;
           // Two-column Excel TSV: "title\tvalue"
           const tabIdx = line.indexOf('\t');
           if (tabIdx !== -1) {
-            return { title: line.slice(0, tabIdx).trim(), value: line.slice(tabIdx + 1).trim() };
+            title = line.slice(0, tabIdx).trim();
+            value = line.slice(tabIdx + 1).trim();
+          } else {
+            // Single column: "title @ value"
+            const atIdx = line.lastIndexOf('@');
+            if (atIdx === -1) return null;
+            title = line.slice(0, atIdx).trim();
+            value = line.slice(atIdx + 1).trim();
           }
-          // Single column: "title @ value"
-          const atIdx = line.lastIndexOf('@');
-          if (atIdx === -1) return null;
-          return { title: line.slice(0, atIdx).trim(), value: line.slice(atIdx + 1).trim() };
+          // Strip any stray leading "@ " the user may have included in the value cell
+          value = value.replace(/^@\s*/, '').trimStart();
+          if (!title) return null;
+          return { title, value };
         })
         .filter(Boolean);
     }
