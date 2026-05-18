@@ -1,8 +1,8 @@
 (() => {
-  const VERSION = 'fr_v16';
+  const VERSION = 'fr_v17';
   if (window[VERSION]) return;
   window[VERSION] = true;
-  ['__findReplaceLoaded','fr_v2','fr_v3','fr_v4','fr_v5','fr_v6','fr_v7','fr_v8','fr_v9','fr_v10','fr_v11','fr_v12','fr_v13','fr_v14','fr_v15'].forEach(k => delete window[k]);
+  ['__findReplaceLoaded','fr_v2','fr_v3','fr_v4','fr_v5','fr_v6','fr_v7','fr_v8','fr_v9','fr_v10','fr_v11','fr_v12','fr_v13','fr_v14','fr_v15','fr_v16'].forEach(k => delete window[k]);
 
   // ── State ────────────────────────────────────────────────────────────────
   let state = {
@@ -90,34 +90,30 @@
   function getVal(el) { return el.isContentEditable ? el.innerText : el.value; }
 
   function setVal(el, value) {
-    // Lift all locks permanently so the value sticks
-    if (el.disabled)  { el.removeAttribute('disabled');  try { el.disabled  = false; } catch(_){} }
-    if (el.readOnly)  { el.removeAttribute('readonly');   try { el.readOnly  = false; } catch(_){} }
-    if (el.getAttribute('aria-disabled') === 'true') el.setAttribute('aria-disabled','false');
+    // Temporarily lift locks so the setter actually sticks
+    const wasDisabled = el.disabled;
+    const wasReadOnly = el.readOnly;
+    if (wasDisabled) { el.removeAttribute('disabled'); el.disabled = false; }
+    if (wasReadOnly) { el.removeAttribute('readonly'); el.readOnly = false; }
 
     if (el.isContentEditable) {
-      el.focus();
       el.innerText = value;
-      el.dispatchEvent(new Event('input',  { bubbles: true }));
-      el.dispatchEvent(new Event('change', { bubbles: true }));
+      el.dispatchEvent(new Event('input', { bubbles: true }));
     } else if (el.tagName === 'SELECT') {
-      el.focus();
       el.value = value;
       el.dispatchEvent(new Event('input',  { bubbles: true }));
       el.dispatchEvent(new Event('change', { bubbles: true }));
     } else {
-      el.focus();
-      // Use native prototype setter to bypass React/Vue/Angular controlled-input guards
-      const proto  = el.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+      const proto = el.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
       const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
       if (setter) setter.call(el, value); else el.value = value;
-      el.dispatchEvent(new KeyboardEvent('keydown',  { bubbles: true }));
-      el.dispatchEvent(new KeyboardEvent('keypress', { bubbles: true }));
-      el.dispatchEvent(new KeyboardEvent('keyup',    { bubbles: true }));
-      el.dispatchEvent(new Event('input',            { bubbles: true }));
-      el.dispatchEvent(new Event('change',           { bubbles: true }));
-      el.dispatchEvent(new Event('blur',             { bubbles: true }));
+      el.dispatchEvent(new Event('input',  { bubbles: true }));
+      el.dispatchEvent(new Event('change', { bubbles: true }));
     }
+
+    // Restore original lock state
+    if (wasDisabled) { el.disabled = true; el.setAttribute('disabled', ''); }
+    if (wasReadOnly) { el.readOnly = true; el.setAttribute('readonly', ''); }
   }
 
   const HL_CLASSES = ['__fr_hl','__fr_hl_act','__fr_hl_ro','__fr_hl_ro_act'];
@@ -571,9 +567,11 @@
       .__frsw_row_value { color:#7ecf7e; flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
       .__frsw_row_match { background:#1a2e1a; }
       .__frsw_row_nomatch { opacity:.45; }
-      .__frsw_row_badge { font-size:9px; padding:1px 5px; border-radius:4px; font-weight:700; background:#206020; color:#a8e6a8; white-space:nowrap; flex-shrink:0; }
+      .__frsw_row_badge {
+        font-size:9px; padding:1px 5px; border-radius:4px; font-weight:700;
+        background:#206020; color:#a8e6a8; white-space:nowrap; flex-shrink:0;
+      }
       .__frsw_row_badge.miss { background:#3a1a1a; color:#e08080; }
-      .__frsw_row_badge.td   { background:#1a3a5a; color:#80b8e0; }
       #__frsw_btnrow { display:grid; grid-template-columns:1fr 2fr; gap:7px; margin-top:10px; }
       #__frsw_btnrow button {
         padding:9px 8px; border:none; border-radius:8px; font-size:12px;
@@ -624,57 +622,26 @@
         .map(line => line.replace(/\r$/, '').trimEnd())
         .filter(line => line.trim())
         .map(line => {
-          let title, value;
-          // Two-column Excel TSV: "title\tvalue"
-          const tabIdx = line.indexOf('\t');
-          if (tabIdx !== -1) {
-            title = line.slice(0, tabIdx).trim();
-            value = line.slice(tabIdx + 1).trim();
-          } else {
-            // Single column: "title @ value"
-            const atIdx = line.lastIndexOf('@');
-            if (atIdx === -1) return null;
-            title = line.slice(0, atIdx).trim();
-            value = line.slice(atIdx + 1).trim();
-          }
-          // Strip any stray leading "@ " the user may have included in the value cell
-          value = value.replace(/^@\s*/, '').trimStart();
+          // Only @ as separator — last @ splits title from value
+          const atIdx = line.lastIndexOf('@');
+          if (atIdx === -1) return null;
+          const title = line.slice(0, atIdx).trim();
+          const value = line.slice(atIdx + 1).trim();
           if (!title) return null;
           return { title, value };
         })
         .filter(Boolean);
     }
 
-    // Returns all candidate inputs whose title contains the needle
-    function findCandidates(title) {
-      const needle = title.toLowerCase();
-      return Array.from(document.querySelectorAll('input[title], textarea[title], select[title]'))
-        .filter(el => {
-          const t = el.getAttribute('title').trim().toLowerCase();
-          return t.includes(needle);
-        });
-    }
-
-    // Fallback: find a <td> or <th> whose text contains the needle,
-    // then return the first usable input in the same <tr>
-    function findByTd(title) {
-      const needle = title.toLowerCase();
-      const SKIP_TYPES = new Set(['hidden','submit','button','reset','file','image']);
-      const cells = Array.from(document.querySelectorAll('td, th'))
-        .filter(td => td.textContent.trim().toLowerCase().includes(needle));
-      for (const cell of cells) {
-        const row = cell.closest('tr');
-        if (!row) continue;
-        const input = row.querySelector(
-          'input:not([type="hidden"]):not([type="submit"]):not([type="button"]):not([type="reset"]):not([type="file"]):not([type="image"]), textarea, select'
-        );
-        if (input) return { el: input, via: 'td' };
-      }
-      return null;
-    }
-
-    // True if the element has a non-empty span somewhere just before it in the DOM
+    // True if the input has a non-empty <span> as a sibling or ancestor sibling
+    // (span directly in the same TD, or label pointing to it)
     function hasPrecedingSpan(el) {
+      const td = el.closest('td');
+      if (td) {
+        // Any non-empty span anywhere inside the same <td>
+        return [...td.querySelectorAll('span')].some(s => s.textContent.trim());
+      }
+      // Fallback: check previous siblings in parent
       let sib = el.previousElementSibling;
       while (sib) {
         if (sib.tagName === 'SPAN' && sib.textContent.trim()) return true;
@@ -698,15 +665,55 @@
       return false;
     }
 
-    // Resolve the single best target for a title string.
-    // Returns { el, via } where via = 'title' | 'td' | null
-    function resolveTarget(title) {
-      const candidates = findCandidates(title);
-      if (candidates.length) {
-        const withSpan = candidates.filter(hasPrecedingSpan);
-        return { el: withSpan[0] || candidates[0], via: 'title' };
-      }
-      return findByTd(title) || { el: null, via: null };
+    // Get the text of preceding <td> cells in the same <tr> (before the td containing the input)
+    function getPrecedingTdText(el) {
+      const td = el.closest('td');
+      if (!td) return '';
+      const tr = td.parentElement;
+      if (!tr) return '';
+      const tds = [...tr.querySelectorAll('td')];
+      const inputTdIdx = tds.indexOf(td);
+      // Collect text from TDs before the input's TD
+      return tds.slice(0, inputTdIdx).map(t => t.textContent.trim()).join(' ');
+    }
+
+    // Returns all candidate inputs:
+    // 1. First try: inputs whose [title] attribute contains the needle
+    // 2. Fallback: inputs inside a <tr> where preceding <td> text contains the needle
+    function findCandidates(title) {
+      const needle = title.toLowerCase();
+
+      // Pass 1: match by title attribute
+      const byTitle = Array.from(document.querySelectorAll('input, textarea, select'))
+        .filter(el => {
+          const t = (el.getAttribute('title') || '').trim().toLowerCase();
+          return t && t.includes(needle);
+        });
+      if (byTitle.length) return byTitle;
+
+      // Pass 2: match by preceding <td> text in the same <tr>
+      const allInputs = Array.from(document.querySelectorAll('input, textarea, select'))
+        .filter(el => {
+          if (el.tagName === 'INPUT') {
+            const t = (el.type || 'text').toLowerCase();
+            if (['hidden','submit','button','reset','file','image','checkbox','radio'].includes(t)) return false;
+          }
+          return true;
+        });
+
+      return allInputs.filter(el => {
+        const precedingText = getPrecedingTdText(el).toLowerCase();
+        return precedingText && precedingText.includes(needle);
+      });
+    }
+
+    // Pick exactly 1 best candidate:
+    // Among candidates, prefer those with a non-empty <span> in their TD (over those without).
+    // Within each group, take the first.
+    function pickBest(candidates) {
+      if (!candidates.length) return null;
+      const withSpan = candidates.filter(hasPrecedingSpan);
+      return withSpan[0] || candidates[0];
     }
 
     const textarea  = win.querySelector('#__frsw_paste');
@@ -718,10 +725,11 @@
       resultEl.textContent = '';
       if (!rows.length) { preview.innerHTML = ''; return; }
       preview.innerHTML = rows.map(r => {
-        const { el, via } = resolveTarget(r.title);
-        const ok = !!el;
-        const label = via === 'td' ? '1 pole (td)' : ok ? '1 pole' : 'brak';
-        const badge = `<span class="__frsw_row_badge ${ok ? (via === 'td' ? 'td' : '') : 'miss'}">${label}</span>`;
+        const best = pickBest(findCandidates(r.title));
+        const ok = !!best;
+        const badge = ok
+          ? `<span class="__frsw_row_badge">1 pole</span>`
+          : `<span class="__frsw_row_badge miss">brak</span>`;
         return `<div class="__frsw_row ${ok ? '__frsw_row_match' : '__frsw_row_nomatch'}">
           <span class="__frsw_row_title">${r.title}</span>
           <span class="__frsw_row_arrow">→</span>
@@ -749,7 +757,7 @@
       }
       let filled = 0;
       rows.forEach(r => {
-        const { el } = resolveTarget(r.title);
+        const el = pickBest(findCandidates(r.title));
         if (el) { setVal(el, r.value); filled++; }
       });
       refreshPreview();
@@ -758,7 +766,7 @@
         resultEl.className = '';
         showToast(`✏️ Schema: podstawiono ${filled} pole(i)`);
       } else {
-        resultEl.textContent = '⚠️ Nie znaleziono pasujących pól (title ani td).';
+        resultEl.textContent = '⚠️ Nie znaleziono pasujących pól (sprawdź atrybut title).';
         resultEl.className = 'err';
       }
     });
