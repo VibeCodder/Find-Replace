@@ -1,8 +1,8 @@
 (() => {
-  const VERSION = 'fr_v18';
+  const VERSION = 'fr_v19';
   if (window[VERSION]) return;
   window[VERSION] = true;
-  ['__findReplaceLoaded','fr_v2','fr_v3','fr_v4','fr_v5','fr_v6','fr_v7','fr_v8','fr_v9','fr_v10','fr_v11','fr_v12','fr_v13','fr_v14','fr_v15','fr_v16','fr_v17'].forEach(k => delete window[k]);
+  ['__findReplaceLoaded','fr_v2','fr_v3','fr_v4','fr_v5','fr_v6','fr_v7','fr_v8','fr_v9','fr_v10','fr_v11','fr_v12','fr_v13','fr_v14','fr_v15','fr_v16','fr_v17','fr_v18'].forEach(k => delete window[k]);
 
   // ── State ────────────────────────────────────────────────────────────────
   let state = {
@@ -633,15 +633,49 @@
         .filter(Boolean);
     }
 
-    // True if the input has a non-empty <span> as a sibling or ancestor sibling
-    // (span directly in the same TD, or label pointing to it)
+    // True if the input has a non-empty <span> that PRECEDES it in the DOM
+    // within the same <td> (or among previous siblings / ancestor siblings).
+    // Spans that appear AFTER the input (e.g. error/helper text) are ignored.
     function hasPrecedingSpan(el) {
       const td = el.closest('td');
       if (td) {
-        // Any non-empty span anywhere inside the same <td>
-        return [...td.querySelectorAll('span')].some(s => s.textContent.trim());
+        // Walk all child nodes of the TD in order; collect spans seen BEFORE
+        // we encounter `el` (or an ancestor of `el` inside the TD).
+        // We stop as soon as we hit the subtree containing `el`.
+        let foundSpan = false;
+        const walker = document.createTreeWalker(td, NodeFilter.SHOW_ELEMENT, {
+          acceptNode(node) {
+            // Don't descend into the input itself
+            if (node === el) return NodeFilter.FILTER_REJECT;
+            // If the input is inside this node, we've reached the boundary —
+            // mark it as REJECT so we stop descending, but still ACCEPT
+            // prior siblings via the outer loop below.
+            return NodeFilter.FILTER_ACCEPT;
+          }
+        });
+        let node;
+        while ((node = walker.nextNode())) {
+          // Stop traversal once we reach an ancestor of `el` that is a direct
+          // child of `td` (meaning `el` is inside it — everything from here on
+          // is either `el` itself or comes after it).
+          if (node.parentElement === td && node.contains(el)) break;
+          if (node.tagName === 'SPAN' && node.textContent.trim()) {
+            foundSpan = true;
+            break;
+          }
+        }
+        if (foundSpan) return true;
+
+        // Also accept: a <label for="..."> anywhere on the page pointing to this input
+        const id = el.id;
+        if (id) {
+          const lbl = document.querySelector(`label[for="${CSS.escape(id)}"]`);
+          if (lbl && lbl.textContent.trim()) return true;
+        }
+        return false;
       }
-      // Fallback: check previous siblings in parent
+
+      // ── Fallback (no TD ancestor): previous siblings in the same parent ──
       let sib = el.previousElementSibling;
       while (sib) {
         if (sib.tagName === 'SPAN' && sib.textContent.trim()) return true;
@@ -659,7 +693,7 @@
       }
       const id = el.id;
       if (id) {
-        const lbl = document.querySelector(`label[for="${id}"]`);
+        const lbl = document.querySelector(`label[for="${CSS.escape(id)}"]`);
         if (lbl && lbl.textContent.trim()) return true;
       }
       return false;
