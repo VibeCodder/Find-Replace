@@ -665,21 +665,48 @@
       return false;
     }
 
-    // Get the text of preceding <td> cells in the same <tr> (before the td containing the input)
-    function getPrecedingTdText(el) {
+    // Collect all label text for a given input element.
+    // Handles two layouts:
+    //   Layout A: label TD in the SAME <tr> before the input TD
+    //   Layout B: label TD in an EARLIER <tr> with rowspan covering this row
+    function getRowLabelText(el) {
       const td = el.closest('td');
       if (!td) return '';
       const tr = td.parentElement;
       if (!tr) return '';
-      const tds = [...tr.querySelectorAll('td')];
-      const inputTdIdx = tds.indexOf(td);
-      // Collect text from TDs before the input's TD
-      return tds.slice(0, inputTdIdx).map(t => t.textContent.trim()).join(' ');
+      const tbody = tr.parentElement;
+      const texts = [];
+
+      // Part 1: same-row TDs before the input TD
+      const sameTds = [...tr.children].filter(c => c.tagName === 'TD' || c.tagName === 'TH');
+      const inputTdIdx = sameTds.indexOf(td);
+      sameTds.slice(0, inputTdIdx).forEach(t => {
+        const txt = t.textContent.trim();
+        if (txt) texts.push(txt);
+      });
+
+      // Part 2: rowspan TDs from earlier rows that geometrically cover this row
+      if (tbody) {
+        const rows = [...tbody.children].filter(c => c.tagName === 'TR');
+        const rowIdx = rows.indexOf(tr);
+        for (let ri = 0; ri < rowIdx; ri++) {
+          const earlierTds = [...rows[ri].children].filter(c => c.tagName === 'TD' || c.tagName === 'TH');
+          earlierTds.forEach(etd => {
+            const span = parseInt(etd.getAttribute('rowspan') || '1', 10);
+            if (ri + span > rowIdx) {
+              const txt = etd.textContent.trim();
+              if (txt) texts.push(txt);
+            }
+          });
+        }
+      }
+
+      return texts.join(' ');
     }
 
     // Returns all candidate inputs:
     // 1. First try: inputs whose [title] attribute contains the needle
-    // 2. Fallback: inputs inside a <tr> where preceding <td> text contains the needle
+    // 2. Fallback: inputs whose row label text (same-row + rowspan TDs) contains the needle
     function findCandidates(title) {
       const needle = title.toLowerCase();
 
@@ -691,7 +718,7 @@
         });
       if (byTitle.length) return byTitle;
 
-      // Pass 2: match by preceding <td> text in the same <tr>
+      // Pass 2: match by row label text
       const allInputs = Array.from(document.querySelectorAll('input, textarea, select'))
         .filter(el => {
           if (el.tagName === 'INPUT') {
@@ -702,8 +729,8 @@
         });
 
       return allInputs.filter(el => {
-        const precedingText = getPrecedingTdText(el).toLowerCase();
-        return precedingText && precedingText.includes(needle);
+        const labelText = getRowLabelText(el).toLowerCase();
+        return labelText && labelText.includes(needle);
       });
     }
 
