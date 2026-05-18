@@ -129,6 +129,12 @@ document.getElementById('btnCopyForms').addEventListener('click', async () => {
 document.getElementById('btnPasteForms').addEventListener('click', async () => {
   await sendMessage('pasteForms');
 });
+document.getElementById('btnUnlockInputs').addEventListener('click', async () => {
+  await sendMessage('unlockInputs');
+});
+document.getElementById('btnFillSchema').addEventListener('click', async () => {
+  await sendMessage('schemaWindow');
+});
 document.getElementById('btnClearForms').addEventListener('click', async () => {
   if (!confirm('Clear all form fields on this page?')) return;
   await sendMessage('clearForms');

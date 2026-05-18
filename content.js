@@ -1,14 +1,29 @@
 (() => {
-  const VERSION = 'fr_v15';
+  const VERSION = 'fr_v16';
   if (window[VERSION]) return;
   window[VERSION] = true;
-  ['__findReplaceLoaded','fr_v2','fr_v3','fr_v4','fr_v5','fr_v6','fr_v7','fr_v8','fr_v9','fr_v10','fr_v11','fr_v12','fr_v13','fr_v14'].forEach(k => delete window[k]);
+  ['__findReplaceLoaded','fr_v2','fr_v3','fr_v4','fr_v5','fr_v6','fr_v7','fr_v8','fr_v9','fr_v10','fr_v11','fr_v12','fr_v13','fr_v14','fr_v15'].forEach(k => delete window[k]);
 
   // ── State ────────────────────────────────────────────────────────────────
   let state = {
     search: '', replace: '', caseSensitive: false,
     wholeWord: false, searchAll: false, matches: [], current: -1,
   };
+
+  // ── Title schema parser ──────────────────────────────────────────────────
+  // Recognises the pattern:  title part1 part2 @ value
+  // Everything before the LAST '@' is the human-readable label.
+  // Everything after  the LAST '@' is the preset/default value.
+  function parseTitleSchema(el) {
+    const raw = (el.getAttribute('title') || '').trim();
+    const atIdx = raw.lastIndexOf('@');
+    if (atIdx === -1) return { label: null, preset: null, hasSchema: false };
+    return {
+      hasSchema: true,
+      label:  raw.slice(0, atIdx).trim()  || null,
+      preset: raw.slice(atIdx + 1).trim() || null,
+    };
+  }
 
   // ── Styles ───────────────────────────────────────────────────────────────
   const STYLE_ID = '__fr_style';
@@ -315,12 +330,15 @@
       } else {
         value = el.value;
       }
-      const label = el.getAttribute('aria-label')
-        || el.getAttribute('placeholder')
-        || el.getAttribute('name')
-        || el.getAttribute('id')
-        || `field_${i}`;
-      return { index: i, label, value, tag: el.tagName, type: el.type || '' };
+      const schema = parseTitleSchema(el);
+      const label = (schema.hasSchema && schema.label)
+        ? schema.label
+        : (el.getAttribute('aria-label')
+          || el.getAttribute('placeholder')
+          || el.getAttribute('name')
+          || el.getAttribute('id')
+          || `field_${i}`);
+      return { index: i, label, value, tag: el.tagName, type: el.type || '', schemaPreset: schema.preset };
     });
 
     // Send to background for storage (cross-tab clipboard)
@@ -377,15 +395,306 @@
     showToast(`🗑️ Cleared ${fields.length} field(s)`);
   };
 
+  // ── Unlock all inputs ─────────────────────────────────────────────────────
+  window.__frUnlockInputs = function() {
+    let count = 0;
+
+    // 1. Inject a <style> that overrides common CSS-level locks globally
+    const UNLOCK_STYLE_ID = '__fr_unlock_style';
+    if (!document.getElementById(UNLOCK_STYLE_ID)) {
+      const s = document.createElement('style');
+      s.id = UNLOCK_STYLE_ID;
+      s.textContent = `
+        input[disabled], textarea[disabled], select[disabled],
+        input[readonly], textarea[readonly],
+        input.__fr_unlocked, textarea.__fr_unlocked, select.__fr_unlocked {
+          pointer-events: auto !important;
+          user-select: text !important;
+          opacity: 1 !important;
+          cursor: text !important;
+          color: inherit !important;
+          background: inherit !important;
+        }
+      `;
+      document.head.appendChild(s);
+    }
+
+    document.querySelectorAll(
+      'input, textarea, select, [contenteditable]'
+    ).forEach(el => {
+      let unlocked = false;
+
+      // a) disabled attribute / property
+      if (el.disabled || el.hasAttribute('disabled')) {
+        el.removeAttribute('disabled');
+        try { el.disabled = false; } catch (_) {}
+        unlocked = true;
+      }
+
+      // b) readonly attribute / property
+      if (el.readOnly || el.hasAttribute('readonly')) {
+        el.removeAttribute('readonly');
+        try { el.readOnly = false; } catch (_) {}
+        unlocked = true;
+      }
+
+      // c) aria-disabled
+      if (el.getAttribute('aria-disabled') === 'true') {
+        el.setAttribute('aria-disabled', 'false');
+        unlocked = true;
+      }
+
+      // d) contenteditable="false"
+      if (el.getAttribute('contenteditable') === 'false') {
+        el.setAttribute('contenteditable', 'true');
+        unlocked = true;
+      }
+
+      // e) inline style pointer-events / user-select
+      const cs = getComputedStyle(el);
+      if (cs.pointerEvents === 'none') {
+        el.style.setProperty('pointer-events', 'auto', 'important');
+        unlocked = true;
+      }
+      if (cs.userSelect === 'none' && el.tagName !== 'SELECT') {
+        el.style.setProperty('user-select', 'text', 'important');
+        unlocked = true;
+      }
+
+      // f) tabindex=-1 makes inputs unfocusable; restore to 0
+      if (el.getAttribute('tabindex') === '-1') {
+        el.setAttribute('tabindex', '0');
+        unlocked = true;
+      }
+
+      // g) mark with helper class so the override style above applies
+      el.classList.add('__fr_unlocked');
+      if (unlocked) count++;
+    });
+
+    // Also unlock any element that has an onclick/onmousedown that calls preventDefault
+    // by overlaying pointer-events on covering elements — best-effort via z-index scan
+    document.querySelectorAll('[style*="pointer-events:none"],[style*="pointer-events: none"]').forEach(el => {
+      el.style.setProperty('pointer-events', 'auto', 'important');
+    });
+
+    showToast(`🔓 Odblokowano ${count} pole(i)`);
+    return count;
+  };
+
+  // ── Schema window — paste Excel table (title @ value) ────────────────────
+  window.__frOpenSchemaWindow = function() {
+    const WIN_ID = '__fr_schema_win';
+    if (document.getElementById(WIN_ID)) { document.getElementById(WIN_ID).remove(); return; }
+
+    const win = document.createElement('div');
+    win.id = WIN_ID;
+    win.innerHTML = `
+      <div id="__frsw_header">
+        <span id="__frsw_title">✏️ Schema: wklej z Excela</span>
+        <button id="__frsw_close">✕</button>
+      </div>
+      <div id="__frsw_body">
+        <div class="__frsw_label">Wklej tutaj dane z Excela</div>
+        <div class="__frsw_hint">Każdy wiersz: <code>tytuł&nbsp;@&nbsp;wartość</code></div>
+        <textarea id="__frsw_paste" placeholder="np.&#10;Imię @ Jan&#10;Nazwisko @ Kowalski&#10;Email @ jan@example.com" spellcheck="false"></textarea>
+        <div id="__frsw_preview"></div>
+        <div id="__frsw_btnrow">
+          <button id="__frsw_clear_ta">🗑 Wyczyść</button>
+          <button id="__frsw_apply" class="__frsw_primary">✅ Podstaw wartości</button>
+        </div>
+        <div id="__frsw_result"></div>
+      </div>
+    `;
+
+    const style = document.createElement('style');
+    style.id = '__frsw_style';
+    style.textContent = `
+      #__fr_schema_win {
+        position:fixed; top:70px; right:20px; z-index:2147483647;
+        width:360px; background:#141414; border:1px solid #333;
+        border-radius:12px; box-shadow:0 8px 40px rgba(0,0,0,.75);
+        font-family:'DM Sans',system-ui,sans-serif; color:#d4d4d4; font-size:13px;
+      }
+      #__fr_schema_win * { box-sizing:border-box; }
+      #__frsw_header {
+        display:flex; align-items:center; padding:11px 14px 10px;
+        border-bottom:1px solid #2a2a2a; cursor:move;
+      }
+      #__frsw_title { font-weight:700; font-size:13px; flex:1; }
+      #__frsw_close {
+        background:none; border:none; color:#666; font-size:16px;
+        cursor:pointer; padding:0 4px; line-height:1;
+      }
+      #__frsw_close:hover { color:#fff; }
+      #__frsw_body { padding:12px 14px 14px; }
+      .__frsw_label { font-size:10px; font-weight:600; color:#aaa; text-transform:uppercase; letter-spacing:.06em; margin-bottom:4px; }
+      .__frsw_hint { font-size:11px; color:#666; margin-bottom:8px; }
+      .__frsw_hint code { background:#252525; border:1px solid #333; border-radius:4px; padding:1px 5px; font-family:monospace; color:#9ecf9e; font-size:11px; }
+      #__frsw_paste {
+        width:100%; height:130px; background:#252525; border:1px solid #333;
+        border-radius:8px; padding:9px 11px; font-family:monospace; font-size:12px;
+        color:#d4d4d4; outline:none; resize:vertical; line-height:1.6;
+      }
+      #__frsw_paste:focus { border-color:#2d6a2d; box-shadow:0 0 0 2px rgba(45,106,45,.25); }
+      #__frsw_preview {
+        margin-top:8px; max-height:110px; overflow-y:auto;
+        background:#1a1a1a; border:1px solid #2a2a2a; border-radius:8px;
+        font-size:11px; font-family:monospace;
+      }
+      #__frsw_preview:empty { display:none; }
+      .__frsw_row {
+        display:flex; align-items:center; gap:6px;
+        padding:5px 9px; border-bottom:1px solid #222;
+      }
+      .__frsw_row:last-child { border-bottom:none; }
+      .__frsw_row_title { color:#aaa; flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+      .__frsw_row_arrow { color:#555; }
+      .__frsw_row_value { color:#7ecf7e; flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+      .__frsw_row_match { background:#1a2e1a; }
+      .__frsw_row_nomatch { opacity:.45; }
+      .__frsw_row_badge {
+        font-size:9px; padding:1px 5px; border-radius:4px; font-weight:700;
+        background:#206020; color:#a8e6a8; white-space:nowrap; flex-shrink:0;
+      }
+      .__frsw_row_badge.miss { background:#3a1a1a; color:#e08080; }
+      #__frsw_btnrow { display:grid; grid-template-columns:1fr 2fr; gap:7px; margin-top:10px; }
+      #__frsw_btnrow button {
+        padding:9px 8px; border:none; border-radius:8px; font-size:12px;
+        font-weight:600; cursor:pointer; background:#1a4d1a; color:#7ecf7e;
+        transition:background .15s;
+      }
+      #__frsw_btnrow button.__frsw_primary { background:#206020; color:#a8e6a8; }
+      #__frsw_btnrow button.__frsw_primary:hover { background:#2d8c2d; }
+      #__frsw_btnrow button:not(.__frsw_primary):hover { background:#206020; }
+      #__frsw_result {
+        margin-top:8px; font-size:11px; color:#3aaa3a; font-family:monospace;
+        min-height:14px; text-align:center;
+      }
+      #__frsw_result.err { color:#c0392b; }
+    `;
+    document.head.appendChild(style);
+    document.body.appendChild(win);
+
+    // ── Drag ──────────────────────────────────────────────────────────────
+    const hdr = win.querySelector('#__frsw_header');
+    let dOX, dOY, dragging = false;
+    hdr.addEventListener('mousedown', e => {
+      if (e.target.id === '__frsw_close') return;
+      dragging = true;
+      dOX = e.clientX - win.getBoundingClientRect().left;
+      dOY = e.clientY - win.getBoundingClientRect().top;
+      e.preventDefault();
+    });
+    document.addEventListener('mousemove', e => {
+      if (!dragging) return;
+      win.style.left  = (e.clientX - dOX) + 'px';
+      win.style.top   = (e.clientY - dOY) + 'px';
+      win.style.right = 'auto';
+    });
+    document.addEventListener('mouseup', () => { dragging = false; });
+
+    win.querySelector('#__frsw_close').addEventListener('click', () => {
+      win.remove();
+      document.getElementById('__frsw_style')?.remove();
+    });
+
+    // ── Parse pasted text ─────────────────────────────────────────────────
+    // Each line: "some title text @ some value"   (last @ is the separator)
+    // Handles Excel paste: both single-column (title @ value) and
+    // two-column TSV (title TAB value) where value may itself contain @
+    function parseLines(text) {
+      return text.split('\n')
+        .map(line => line.replace(/\r$/, '').trimEnd())
+        .filter(line => line.trim())
+        .map(line => {
+          // Two-column Excel TSV: "title\tvalue"
+          const tabIdx = line.indexOf('\t');
+          if (tabIdx !== -1) {
+            return { title: line.slice(0, tabIdx).trim(), value: line.slice(tabIdx + 1).trim() };
+          }
+          // Single column: "title @ value"
+          const atIdx = line.lastIndexOf('@');
+          if (atIdx === -1) return null;
+          return { title: line.slice(0, atIdx).trim(), value: line.slice(atIdx + 1).trim() };
+        })
+        .filter(Boolean);
+    }
+
+    // Find all inputs whose title matches a parsed title (case-insensitive trim)
+    function matchInputs(title) {
+      const needle = title.toLowerCase();
+      return Array.from(document.querySelectorAll('input[title], textarea[title], select[title]'))
+        .filter(el => el.getAttribute('title').trim().toLowerCase() === needle);
+    }
+
+    const textarea  = win.querySelector('#__frsw_paste');
+    const preview   = win.querySelector('#__frsw_preview');
+    const resultEl  = win.querySelector('#__frsw_result');
+
+    function refreshPreview() {
+      const rows = parseLines(textarea.value);
+      resultEl.textContent = '';
+      if (!rows.length) { preview.innerHTML = ''; return; }
+      preview.innerHTML = rows.map(r => {
+        const hits = matchInputs(r.title);
+        const ok = hits.length > 0;
+        return `<div class="__frsw_row ${ok ? '__frsw_row_match' : '__frsw_row_nomatch'}">
+          <span class="__frsw_row_title">${r.title}</span>
+          <span class="__frsw_row_arrow">→</span>
+          <span class="__frsw_row_value">${r.value || '<em style="opacity:.5">puste</em>'}</span>
+          <span class="__frsw_row_badge ${ok ? '' : 'miss'}">${ok ? hits.length + ' pole' + (hits.length > 1 ? 'i' : '') : 'brak'}</span>
+        </div>`;
+      }).join('');
+    }
+
+    textarea.addEventListener('input', refreshPreview);
+    textarea.addEventListener('paste', () => setTimeout(refreshPreview, 0));
+
+    win.querySelector('#__frsw_clear_ta').addEventListener('click', () => {
+      textarea.value = '';
+      preview.innerHTML = '';
+      resultEl.textContent = '';
+    });
+
+    win.querySelector('#__frsw_apply').addEventListener('click', () => {
+      const rows = parseLines(textarea.value);
+      if (!rows.length) {
+        resultEl.textContent = '⚠️ Brak danych do podstawienia.';
+        resultEl.className = 'err';
+        return;
+      }
+      let filled = 0, total = 0;
+      rows.forEach(r => {
+        const els = matchInputs(r.title);
+        total++;
+        els.forEach(el => { setVal(el, r.value); filled++; });
+      });
+      refreshPreview();
+      if (filled) {
+        resultEl.textContent = `✅ Podstawiono ${filled} pole(i) z ${total} wierszy.`;
+        resultEl.className = '';
+        showToast(`✏️ Schema: podstawiono ${filled} pole(i)`);
+      } else {
+        resultEl.textContent = '⚠️ Nie znaleziono pasujących pól (sprawdź atrybut title).';
+        resultEl.className = 'err';
+      }
+    });
+
+    textarea.focus();
+  };
+
   // ── Message listener ──────────────────────────────────────────────────────
   chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     // Ping — just confirm script is alive
     if (msg.action === 'ping') { sendResponse({ ok: true }); return true; }
 
     // Form tool actions (from popup)
-    if (msg.action === 'copyForms')  { window.__frCopyForms();  sendResponse({ ok: true }); return; }
-    if (msg.action === 'pasteForms') { window.__frPasteForms(); sendResponse({ ok: true }); return; }
-    if (msg.action === 'clearForms') { window.__frClearForms(); sendResponse({ ok: true }); return; }
+    if (msg.action === 'copyForms')      { window.__frCopyForms();       sendResponse({ ok: true }); return; }
+    if (msg.action === 'pasteForms')     { window.__frPasteForms();      sendResponse({ ok: true }); return; }
+    if (msg.action === 'clearForms')     { window.__frClearForms();      sendResponse({ ok: true }); return; }
+    if (msg.action === 'unlockInputs')  { window.__frUnlockInputs();     sendResponse({ ok: true }); return; }
+    if (msg.action === 'schemaWindow')  { window.__frOpenSchemaWindow(); sendResponse({ ok: true }); return; }
 
     // Find & Replace actions
     const prev = { ...state };

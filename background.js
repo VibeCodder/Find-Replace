@@ -1,11 +1,13 @@
 chrome.runtime.onInstalled.addListener(() => {
   chrome.contextMenus.removeAll(() => {
-    chrome.contextMenus.create({ id: 'fr-open',        title: '🔍 Find & Replace',     contexts: ['page','selection'] });
-    chrome.contextMenus.create({ id: 'sep1', type: 'separator',                         contexts: ['page','selection'] });
-    chrome.contextMenus.create({ id: 'fr-copy-forms',  title: '📋 Copy all form data', contexts: ['page'] });
-    chrome.contextMenus.create({ id: 'fr-paste-forms', title: '📥 Paste form data',    contexts: ['page'] });
-    chrome.contextMenus.create({ id: 'fr-clear-forms',    title: '🗑️ Clear all forms',   contexts: ['page'] });
-    chrome.contextMenus.create({ id: 'fr-replace-schema', title: '📊 Replace Schema',       contexts: ['page','selection'] });
+    chrome.contextMenus.create({ id: 'fr-open',          title: '🔍 Find & Replace',          contexts: ['page','selection'] });
+    chrome.contextMenus.create({ id: 'sep1', type: 'separator',                                contexts: ['page','selection'] });
+    chrome.contextMenus.create({ id: 'fr-copy-forms',    title: '📋 Copy all form data',      contexts: ['page'] });
+    chrome.contextMenus.create({ id: 'fr-paste-forms',   title: '📥 Paste form data',         contexts: ['page'] });
+    chrome.contextMenus.create({ id: 'fr-clear-forms',   title: '🗑️ Clear all forms',        contexts: ['page'] });
+    chrome.contextMenus.create({ id: 'sep2', type: 'separator',                                contexts: ['page'] });
+    chrome.contextMenus.create({ id: 'fr-unlock-inputs', title: '🔓 Unlock all inputs',       contexts: ['page'] });
+    chrome.contextMenus.create({ id: 'fr-fill-schema',   title: '✏️ Fill inputs from schema (title @ value)', contexts: ['page'] });
   });
 });
 
@@ -40,8 +42,11 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   if (info.menuItemId === 'fr-clear-forms') {
     await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: () => window.__frClearForms?.() });
   }
-  if (info.menuItemId === 'fr-replace-schema') {
-    await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['schema.js'] });
+  if (info.menuItemId === 'fr-unlock-inputs') {
+    await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: () => window.__frUnlockInputs?.() });
+  }
+  if (info.menuItemId === 'fr-fill-schema') {
+    await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: () => window.__frOpenSchemaWindow?.() });
   }
 });
 

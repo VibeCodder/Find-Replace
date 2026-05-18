@@ -56,6 +56,12 @@
         <button id="__fr_pasteForms" class="__fr_btnfull">📥 Paste form data</button>
       </div>
       <div class="__fr_formcard">
+        <b>🔓 Odblokuj pola</b>
+        <p>Usuwa disabled, readonly, blokady CSS i inne ograniczenia wszystkich pól.</p>
+        <button id="__fr_unlockInputs" class="__fr_btnfull">🔓 Unlock all inputs</button>
+        <button id="__fr_fillSchema" class="__fr_btnfull">✏️ Fill from schema <span style="opacity:.6;font-size:10px">(title @ value)</span></button>
+      </div>
+      <div class="__fr_formcard">
         <b>🗑️ Clear Forms</b>
         <p>Empty all visible inputs on this page.</p>
         <button id="__fr_clearForms" class="__fr_danger __fr_btnfull">🗑️ Clear all fields</button>
@@ -230,6 +236,8 @@
   // ── Form tools ────────────────────────────────────────────────────────────
   panel.querySelector('#__fr_copyForms').addEventListener('click',  () => { window.__frCopyForms?.(); });
   panel.querySelector('#__fr_pasteForms').addEventListener('click', () => { window.__frPasteForms?.(); });
+  panel.querySelector('#__fr_unlockInputs').addEventListener('click', () => { window.__frUnlockInputs?.(); });
+  panel.querySelector('#__fr_fillSchema').addEventListener('click',   () => { window.__frOpenSchemaWindow?.(); });
   panel.querySelector('#__fr_clearForms').addEventListener('click', () => {
     if (confirm('Clear all form fields?')) window.__frClearForms?.();
   });
