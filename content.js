@@ -90,9 +90,19 @@
   function getVal(el) { return el.isContentEditable ? el.innerText : el.value; }
 
   function setVal(el, value) {
+    // Temporarily lift locks so the setter actually sticks
+    const wasDisabled = el.disabled;
+    const wasReadOnly = el.readOnly;
+    if (wasDisabled) { el.removeAttribute('disabled'); el.disabled = false; }
+    if (wasReadOnly) { el.removeAttribute('readonly'); el.readOnly = false; }
+
     if (el.isContentEditable) {
       el.innerText = value;
       el.dispatchEvent(new Event('input', { bubbles: true }));
+    } else if (el.tagName === 'SELECT') {
+      el.value = value;
+      el.dispatchEvent(new Event('input',  { bubbles: true }));
+      el.dispatchEvent(new Event('change', { bubbles: true }));
     } else {
       const proto = el.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
       const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
@@ -100,6 +110,10 @@
       el.dispatchEvent(new Event('input',  { bubbles: true }));
       el.dispatchEvent(new Event('change', { bubbles: true }));
     }
+
+    // Restore original lock state
+    if (wasDisabled) { el.disabled = true; el.setAttribute('disabled', ''); }
+    if (wasReadOnly) { el.readOnly = true; el.setAttribute('readonly', ''); }
   }
 
   const HL_CLASSES = ['__fr_hl','__fr_hl_act','__fr_hl_ro','__fr_hl_ro_act'];
