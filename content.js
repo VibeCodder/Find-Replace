@@ -643,11 +643,48 @@
         .filter(Boolean);
     }
 
-    // Find all inputs whose title matches a parsed title (case-insensitive trim)
-    function matchInputs(title) {
+    // Returns all candidate inputs whose title contains the needle
+    function findCandidates(title) {
       const needle = title.toLowerCase();
       return Array.from(document.querySelectorAll('input[title], textarea[title], select[title]'))
         .filter(el => el.getAttribute('title').trim().toLowerCase().includes(needle));
+    }
+
+    // True if the element has a non-empty span somewhere just before it in the DOM
+    // (previous sibling, or sibling of parent, or label pointing to it)
+    function hasPrecedingSpan(el) {
+      // Check previous siblings (and their last descendants)
+      let sib = el.previousElementSibling;
+      while (sib) {
+        const spans = sib.querySelectorAll('span');
+        if (sib.tagName === 'SPAN' && sib.textContent.trim()) return true;
+        if ([...spans].some(s => s.textContent.trim())) return true;
+        sib = sib.previousElementSibling;
+      }
+      // Check parent's previous siblings
+      const parent = el.parentElement;
+      if (parent) {
+        let psib = parent.previousElementSibling;
+        while (psib) {
+          if (psib.tagName === 'SPAN' && psib.textContent.trim()) return true;
+          if ([...psib.querySelectorAll('span')].some(s => s.textContent.trim())) return true;
+          psib = psib.previousElementSibling;
+        }
+      }
+      // Check associated <label>
+      const id = el.id;
+      if (id) {
+        const lbl = document.querySelector(`label[for="${id}"]`);
+        if (lbl && lbl.textContent.trim()) return true;
+      }
+      return false;
+    }
+
+    // Pick exactly 1 best candidate: prefer one with a non-empty preceding span
+    function pickBest(candidates) {
+      if (!candidates.length) return null;
+      const withSpan = candidates.filter(hasPrecedingSpan);
+      return withSpan[0] || candidates[0];
     }
 
     const textarea  = win.querySelector('#__frsw_paste');
@@ -659,13 +696,16 @@
       resultEl.textContent = '';
       if (!rows.length) { preview.innerHTML = ''; return; }
       preview.innerHTML = rows.map(r => {
-        const hits = matchInputs(r.title);
-        const ok = hits.length > 0;
+        const best = pickBest(findCandidates(r.title));
+        const ok = !!best;
+        const badge = ok
+          ? `<span class="__frsw_row_badge">1 pole</span>`
+          : `<span class="__frsw_row_badge miss">brak</span>`;
         return `<div class="__frsw_row ${ok ? '__frsw_row_match' : '__frsw_row_nomatch'}">
           <span class="__frsw_row_title">${r.title}</span>
           <span class="__frsw_row_arrow">→</span>
           <span class="__frsw_row_value">${r.value || '<em style="opacity:.5">puste</em>'}</span>
-          <span class="__frsw_row_badge ${ok ? '' : 'miss'}">${ok ? hits.length + ' pole' + (hits.length > 1 ? 'i' : '') : 'brak'}</span>
+          ${badge}
         </div>`;
       }).join('');
     }
@@ -686,15 +726,14 @@
         resultEl.className = 'err';
         return;
       }
-      let filled = 0, total = 0;
+      let filled = 0;
       rows.forEach(r => {
-        const els = matchInputs(r.title);
-        total++;
-        els.forEach(el => { setVal(el, r.value); filled++; });
+        const el = pickBest(findCandidates(r.title));
+        if (el) { setVal(el, r.value); filled++; }
       });
       refreshPreview();
       if (filled) {
-        resultEl.textContent = `✅ Podstawiono ${filled} pole(i) z ${total} wierszy.`;
+        resultEl.textContent = `✅ Podstawiono ${filled} / ${rows.length} pól.`;
         resultEl.className = '';
         showToast(`✏️ Schema: podstawiono ${filled} pole(i)`);
       } else {
