@@ -625,7 +625,7 @@
     function matchInputs(title) {
       const needle = title.toLowerCase();
       return Array.from(document.querySelectorAll('input[title], textarea[title], select[title]'))
-        .filter(el => el.getAttribute('title').trim().toLowerCase() === needle);
+        .filter(el => el.getAttribute('title').trim().toLowerCase().includes(needle));
     }
 
     const textarea  = win.querySelector('#__frsw_paste');
