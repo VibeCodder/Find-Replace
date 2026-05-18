@@ -1,8 +1,8 @@
 (() => {
-  const VERSION = 'fr_v17';
+  const VERSION = 'fr_v18';
   if (window[VERSION]) return;
   window[VERSION] = true;
-  ['__findReplaceLoaded','fr_v2','fr_v3','fr_v4','fr_v5','fr_v6','fr_v7','fr_v8','fr_v9','fr_v10','fr_v11','fr_v12','fr_v13','fr_v14','fr_v15','fr_v16'].forEach(k => delete window[k]);
+  ['__findReplaceLoaded','fr_v2','fr_v3','fr_v4','fr_v5','fr_v6','fr_v7','fr_v8','fr_v9','fr_v10','fr_v11','fr_v12','fr_v13','fr_v14','fr_v15','fr_v16','fr_v17'].forEach(k => delete window[k]);
 
   // ── State ────────────────────────────────────────────────────────────────
   let state = {
@@ -665,48 +665,21 @@
       return false;
     }
 
-    // Collect all label text for a given input element.
-    // Handles two layouts:
-    //   Layout A: label TD in the SAME <tr> before the input TD
-    //   Layout B: label TD in an EARLIER <tr> with rowspan covering this row
-    function getRowLabelText(el) {
+    // Get the text of preceding <td> cells in the same <tr> (before the td containing the input)
+    function getPrecedingTdText(el) {
       const td = el.closest('td');
       if (!td) return '';
       const tr = td.parentElement;
       if (!tr) return '';
-      const tbody = tr.parentElement;
-      const texts = [];
-
-      // Part 1: same-row TDs before the input TD
-      const sameTds = [...tr.children].filter(c => c.tagName === 'TD' || c.tagName === 'TH');
-      const inputTdIdx = sameTds.indexOf(td);
-      sameTds.slice(0, inputTdIdx).forEach(t => {
-        const txt = t.textContent.trim();
-        if (txt) texts.push(txt);
-      });
-
-      // Part 2: rowspan TDs from earlier rows that geometrically cover this row
-      if (tbody) {
-        const rows = [...tbody.children].filter(c => c.tagName === 'TR');
-        const rowIdx = rows.indexOf(tr);
-        for (let ri = 0; ri < rowIdx; ri++) {
-          const earlierTds = [...rows[ri].children].filter(c => c.tagName === 'TD' || c.tagName === 'TH');
-          earlierTds.forEach(etd => {
-            const span = parseInt(etd.getAttribute('rowspan') || '1', 10);
-            if (ri + span > rowIdx) {
-              const txt = etd.textContent.trim();
-              if (txt) texts.push(txt);
-            }
-          });
-        }
-      }
-
-      return texts.join(' ');
+      const tds = [...tr.querySelectorAll('td')];
+      const inputTdIdx = tds.indexOf(td);
+      // Collect text from TDs before the input's TD
+      return tds.slice(0, inputTdIdx).map(t => t.textContent.trim()).join(' ');
     }
 
     // Returns all candidate inputs:
     // 1. First try: inputs whose [title] attribute contains the needle
-    // 2. Fallback: inputs whose row label text (same-row + rowspan TDs) contains the needle
+    // 2. Fallback: inputs inside a <tr> where preceding <td> text contains the needle
     function findCandidates(title) {
       const needle = title.toLowerCase();
 
@@ -718,7 +691,7 @@
         });
       if (byTitle.length) return byTitle;
 
-      // Pass 2: match by row label text
+      // Pass 2: match by preceding <td> text in the same <tr>
       const allInputs = Array.from(document.querySelectorAll('input, textarea, select'))
         .filter(el => {
           if (el.tagName === 'INPUT') {
@@ -729,8 +702,8 @@
         });
 
       return allInputs.filter(el => {
-        const labelText = getRowLabelText(el).toLowerCase();
-        return labelText && labelText.includes(needle);
+        const precedingText = getPrecedingTdText(el).toLowerCase();
+        return precedingText && precedingText.includes(needle);
       });
     }
 
@@ -751,12 +724,25 @@
       const rows = parseLines(textarea.value);
       resultEl.textContent = '';
       if (!rows.length) { preview.innerHTML = ''; return; }
+
+      const titleUsageCount = {};
       preview.innerHTML = rows.map(r => {
-        const best = pickBest(findCandidates(r.title));
-        const ok = !!best;
+        const key = r.title.toLowerCase();
+        const usageIdx = titleUsageCount[key] || 0;
+
+        const candidates = findCandidates(r.title);
+        const withSpan = candidates.filter(hasPrecedingSpan);
+        const withoutSpan = candidates.filter(c => !hasPrecedingSpan(c));
+        const ordered = [...withSpan, ...withoutSpan];
+
+        const el = ordered[usageIdx] || null;
+        titleUsageCount[key] = usageIdx + 1;
+
+        const ok = !!el;
+        const occLabel = usageIdx > 0 ? ` #${usageIdx + 1}` : '';
         const badge = ok
-          ? `<span class="__frsw_row_badge">1 pole</span>`
-          : `<span class="__frsw_row_badge miss">brak</span>`;
+          ? `<span class="__frsw_row_badge">pole${occLabel}</span>`
+          : `<span class="__frsw_row_badge miss">brak${occLabel}</span>`;
         return `<div class="__frsw_row ${ok ? '__frsw_row_match' : '__frsw_row_nomatch'}">
           <span class="__frsw_row_title">${r.title}</span>
           <span class="__frsw_row_arrow">→</span>
@@ -782,19 +768,52 @@
         resultEl.className = 'err';
         return;
       }
+
+      // For duplicate titles: track how many times each title has been used
+      // so the 2nd occurrence of "Color" fills the 2nd matching field, not the 1st again.
+      const titleUsageCount = {};  // title.toLowerCase() → number of times already consumed
+      const skipped = [];
+
       let filled = 0;
       rows.forEach(r => {
-        const el = pickBest(findCandidates(r.title));
-        if (el) { setVal(el, r.value); filled++; }
+        const key = r.title.toLowerCase();
+        const usageIdx = titleUsageCount[key] || 0;
+
+        // Get ALL candidates sorted: withSpan first (same order as pickBest),
+        // then the rest — but now we pick by index instead of always first.
+        const candidates = findCandidates(r.title);
+        const withSpan = candidates.filter(hasPrecedingSpan);
+        const withoutSpan = candidates.filter(c => !hasPrecedingSpan(c));
+        const ordered = [...withSpan, ...withoutSpan];
+
+        if (usageIdx < ordered.length) {
+          setVal(ordered[usageIdx], r.value);
+          titleUsageCount[key] = usageIdx + 1;
+          filled++;
+        } else {
+          // No more fields for this title
+          skipped.push(r.title);
+        }
       });
+
       refreshPreview();
+
+      let msg = `✅ Podstawiono ${filled} / ${rows.length} pól.`;
+      let isErr = false;
+      if (skipped.length) {
+        const unique = [...new Set(skipped)];
+        msg += `\n⚠️ Nie znaleziono kolejnego pola dla: ${unique.join(', ')}`;
+        isErr = filled === 0;
+      }
+      resultEl.textContent = msg;
+      resultEl.style.whiteSpace = 'pre-line';
+      resultEl.className = isErr ? 'err' : '';
+
       if (filled) {
-        resultEl.textContent = `✅ Podstawiono ${filled} / ${rows.length} pól.`;
-        resultEl.className = '';
-        showToast(`✏️ Schema: podstawiono ${filled} pole(i)`);
+        const skipNote = skipped.length ? ` (${skipped.length} pominięto)` : '';
+        showToast(`✏️ Schema: podstawiono ${filled} pole(i)${skipNote}`);
       } else {
-        resultEl.textContent = '⚠️ Nie znaleziono pasujących pól (sprawdź atrybut title).';
-        resultEl.className = 'err';
+        showToast('⚠️ Nie znaleziono pasujących pól', true);
       }
     });
 
