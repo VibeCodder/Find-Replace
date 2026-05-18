@@ -90,30 +90,34 @@
   function getVal(el) { return el.isContentEditable ? el.innerText : el.value; }
 
   function setVal(el, value) {
-    // Temporarily lift locks so the setter actually sticks
-    const wasDisabled = el.disabled;
-    const wasReadOnly = el.readOnly;
-    if (wasDisabled) { el.removeAttribute('disabled'); el.disabled = false; }
-    if (wasReadOnly) { el.removeAttribute('readonly'); el.readOnly = false; }
+    // Lift all locks permanently so the value sticks
+    if (el.disabled)  { el.removeAttribute('disabled');  try { el.disabled  = false; } catch(_){} }
+    if (el.readOnly)  { el.removeAttribute('readonly');   try { el.readOnly  = false; } catch(_){} }
+    if (el.getAttribute('aria-disabled') === 'true') el.setAttribute('aria-disabled','false');
 
     if (el.isContentEditable) {
+      el.focus();
       el.innerText = value;
-      el.dispatchEvent(new Event('input', { bubbles: true }));
+      el.dispatchEvent(new Event('input',  { bubbles: true }));
+      el.dispatchEvent(new Event('change', { bubbles: true }));
     } else if (el.tagName === 'SELECT') {
+      el.focus();
       el.value = value;
       el.dispatchEvent(new Event('input',  { bubbles: true }));
       el.dispatchEvent(new Event('change', { bubbles: true }));
     } else {
-      const proto = el.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+      el.focus();
+      // Use native prototype setter to bypass React/Vue/Angular controlled-input guards
+      const proto  = el.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
       const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
       if (setter) setter.call(el, value); else el.value = value;
-      el.dispatchEvent(new Event('input',  { bubbles: true }));
-      el.dispatchEvent(new Event('change', { bubbles: true }));
+      el.dispatchEvent(new KeyboardEvent('keydown',  { bubbles: true }));
+      el.dispatchEvent(new KeyboardEvent('keypress', { bubbles: true }));
+      el.dispatchEvent(new KeyboardEvent('keyup',    { bubbles: true }));
+      el.dispatchEvent(new Event('input',            { bubbles: true }));
+      el.dispatchEvent(new Event('change',           { bubbles: true }));
+      el.dispatchEvent(new Event('blur',             { bubbles: true }));
     }
-
-    // Restore original lock state
-    if (wasDisabled) { el.disabled = true; el.setAttribute('disabled', ''); }
-    if (wasReadOnly) { el.readOnly = true; el.setAttribute('readonly', ''); }
   }
 
   const HL_CLASSES = ['__fr_hl','__fr_hl_act','__fr_hl_ro','__fr_hl_ro_act'];
@@ -567,11 +571,9 @@
       .__frsw_row_value { color:#7ecf7e; flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
       .__frsw_row_match { background:#1a2e1a; }
       .__frsw_row_nomatch { opacity:.45; }
-      .__frsw_row_badge {
-        font-size:9px; padding:1px 5px; border-radius:4px; font-weight:700;
-        background:#206020; color:#a8e6a8; white-space:nowrap; flex-shrink:0;
-      }
+      .__frsw_row_badge { font-size:9px; padding:1px 5px; border-radius:4px; font-weight:700; background:#206020; color:#a8e6a8; white-space:nowrap; flex-shrink:0; }
       .__frsw_row_badge.miss { background:#3a1a1a; color:#e08080; }
+      .__frsw_row_badge.td   { background:#1a3a5a; color:#80b8e0; }
       #__frsw_btnrow { display:grid; grid-template-columns:1fr 2fr; gap:7px; margin-top:10px; }
       #__frsw_btnrow button {
         padding:9px 8px; border:none; border-radius:8px; font-size:12px;
@@ -647,21 +649,38 @@
     function findCandidates(title) {
       const needle = title.toLowerCase();
       return Array.from(document.querySelectorAll('input[title], textarea[title], select[title]'))
-        .filter(el => el.getAttribute('title').trim().toLowerCase().includes(needle));
+        .filter(el => {
+          const t = el.getAttribute('title').trim().toLowerCase();
+          return t.includes(needle);
+        });
+    }
+
+    // Fallback: find a <td> or <th> whose text contains the needle,
+    // then return the first usable input in the same <tr>
+    function findByTd(title) {
+      const needle = title.toLowerCase();
+      const SKIP_TYPES = new Set(['hidden','submit','button','reset','file','image']);
+      const cells = Array.from(document.querySelectorAll('td, th'))
+        .filter(td => td.textContent.trim().toLowerCase().includes(needle));
+      for (const cell of cells) {
+        const row = cell.closest('tr');
+        if (!row) continue;
+        const input = row.querySelector(
+          'input:not([type="hidden"]):not([type="submit"]):not([type="button"]):not([type="reset"]):not([type="file"]):not([type="image"]), textarea, select'
+        );
+        if (input) return { el: input, via: 'td' };
+      }
+      return null;
     }
 
     // True if the element has a non-empty span somewhere just before it in the DOM
-    // (previous sibling, or sibling of parent, or label pointing to it)
     function hasPrecedingSpan(el) {
-      // Check previous siblings (and their last descendants)
       let sib = el.previousElementSibling;
       while (sib) {
-        const spans = sib.querySelectorAll('span');
         if (sib.tagName === 'SPAN' && sib.textContent.trim()) return true;
-        if ([...spans].some(s => s.textContent.trim())) return true;
+        if ([...sib.querySelectorAll('span')].some(s => s.textContent.trim())) return true;
         sib = sib.previousElementSibling;
       }
-      // Check parent's previous siblings
       const parent = el.parentElement;
       if (parent) {
         let psib = parent.previousElementSibling;
@@ -671,7 +690,6 @@
           psib = psib.previousElementSibling;
         }
       }
-      // Check associated <label>
       const id = el.id;
       if (id) {
         const lbl = document.querySelector(`label[for="${id}"]`);
@@ -680,11 +698,15 @@
       return false;
     }
 
-    // Pick exactly 1 best candidate: prefer one with a non-empty preceding span
-    function pickBest(candidates) {
-      if (!candidates.length) return null;
-      const withSpan = candidates.filter(hasPrecedingSpan);
-      return withSpan[0] || candidates[0];
+    // Resolve the single best target for a title string.
+    // Returns { el, via } where via = 'title' | 'td' | null
+    function resolveTarget(title) {
+      const candidates = findCandidates(title);
+      if (candidates.length) {
+        const withSpan = candidates.filter(hasPrecedingSpan);
+        return { el: withSpan[0] || candidates[0], via: 'title' };
+      }
+      return findByTd(title) || { el: null, via: null };
     }
 
     const textarea  = win.querySelector('#__frsw_paste');
@@ -696,11 +718,10 @@
       resultEl.textContent = '';
       if (!rows.length) { preview.innerHTML = ''; return; }
       preview.innerHTML = rows.map(r => {
-        const best = pickBest(findCandidates(r.title));
-        const ok = !!best;
-        const badge = ok
-          ? `<span class="__frsw_row_badge">1 pole</span>`
-          : `<span class="__frsw_row_badge miss">brak</span>`;
+        const { el, via } = resolveTarget(r.title);
+        const ok = !!el;
+        const label = via === 'td' ? '1 pole (td)' : ok ? '1 pole' : 'brak';
+        const badge = `<span class="__frsw_row_badge ${ok ? (via === 'td' ? 'td' : '') : 'miss'}">${label}</span>`;
         return `<div class="__frsw_row ${ok ? '__frsw_row_match' : '__frsw_row_nomatch'}">
           <span class="__frsw_row_title">${r.title}</span>
           <span class="__frsw_row_arrow">→</span>
@@ -728,7 +749,7 @@
       }
       let filled = 0;
       rows.forEach(r => {
-        const el = pickBest(findCandidates(r.title));
+        const { el } = resolveTarget(r.title);
         if (el) { setVal(el, r.value); filled++; }
       });
       refreshPreview();
@@ -737,7 +758,7 @@
         resultEl.className = '';
         showToast(`✏️ Schema: podstawiono ${filled} pole(i)`);
       } else {
-        resultEl.textContent = '⚠️ Nie znaleziono pasujących pól (sprawdź atrybut title).';
+        resultEl.textContent = '⚠️ Nie znaleziono pasujących pól (title ani td).';
         resultEl.className = 'err';
       }
     });
